@@ -2,7 +2,7 @@
 
 [おはツイKeeper](https://ohatwikeeper.com/)の公開プロフィール・推移グラフ・投稿グラス・アワード・ギャラリーを、ターミナルの`ohax`コマンドで見るためのCLI。Go標準ライブラリのみ、依存パッケージなし。
 
-`curl https://{public_uuid}.ohax.pw/graph` などで返ってくるカードを、UUIDの保存・URLの貼り付け・まとめ表示付きで使えるようにしたもの。
+truecolor(256色の端末でも可)で描画し、アバターや投稿画像のサムネイルも端末の中に表示する。表示幅は端末に合わせて自動で調整する。
 
 ## インストール
 
@@ -22,34 +22,41 @@ OS/CPUに合ったビルド済みバイナリを`~/.local/bin/ohax`に置く(`OH
 
 詳しい使い方: https://ohatwikeeper.com/cli
 
-## 配布物のビルド
-
-`./build.sh`で全OS/CPU向けにクロスコンパイルし、ohatwikeeper.comの`cli/dl/`(と`cli/install.sh`)に配置する。`OHAX_DIST_DIR=dist ./build.sh`なら手元に出すだけ。
-
 ## 使い方
 
 ```bash
-ohax 5axwn                  # プロフィール
-ohax graph 5axwn            # 推移グラフ
-ohax grass 5axwn            # 投稿グラス(直近12週間)
-ohax awards 5axwn           # アワード
-ohax gallery 5axwn          # ギャラリー(直近20件)
+ohax 5axwn                  # プロフィール(アバター・統計・連続投稿・直近30日・最近の投稿)
+ohax graph 5axwn            # 推移グラフ(いいね・インプレッション・リポスト・返信)
+ohax grass 5axwn            # 投稿グラス(日ごとの投稿カレンダー)
+ohax awards 5axwn           # アワードと次の目標
+ohax gallery 5axwn          # 画像ギャラリー(サムネイル付き)
+ohax all 5axwn              # 上の5つをまとめて表示
 ohax rss 5axwn              # RSSフィード(XML)
-ohax all 5axwn              # プロフィール〜ギャラリーをまとめて表示
+ohax                        # ヘルプ
 ```
 
-ユーザーの指定には、public_uuidのほかURLもそのまま渡せる。URLにセクションが含まれていればそれを表示する。
+ユーザーの指定には、public_uuidのほか共有URLもそのまま渡せる。URLにページ名が含まれていればそのページを表示する。
 
 ```bash
 ohax https://5axwn.ohax.pw/graph
 ohax ohatwikeeper.com/5axwn/awards
 ```
 
+### オプション
+
+```bash
+ohax graph --days 90        # 直近90日だけ
+ohax grass --weeks 12       # 直近12週間だけ(既定は画面幅に合わせる)
+ohax gallery --limit 30     # 30件(既定12件)
+ohax gallery --no-images    # サムネイルなしの一覧
+ohax --width 80 awards      # 表示幅を指定
+```
+
 ### 既定ユーザー
 
 ```bash
 ohax use 5axwn              # 保存(存在確認してから保存する)
-ohax profile                # 以後はユーザー省略でOK(引数なしの ohax はヘルプ)
+ohax profile                # 以後はユーザー省略でOK
 ohax grass
 ohax whoami                 # 保存中のユーザー
 ohax use --clear            # 削除
@@ -66,10 +73,14 @@ ohax url awards 5axwn       # ブラウザ用URLを表示するだけ
 
 ### 色
 
-出力先が端末なら色付き、パイプ・リダイレクト先や`NO_COLOR`設定時は自動で色なし(リンクのエスケープも除去)。`-n`/`--no-color`で強制的に色なし、`--color`でパイプ先でも色付き。
+出力先が端末なら色付き、パイプ・リダイレクト先や`NO_COLOR`設定時は自動で色なし(サムネイルも出さず、画像はURLで表示)。`-n`/`--no-color`で強制的に色なし、`--color`でパイプ先でも色付き。色の段階は`COLORTERM`等から判定し、`OHAX_COLOR=truecolor|256|none`で上書きできる。
 
 ## 仕組み
 
-- サーバー(ohatwikeeper.com)はUser-Agentに`curl`を含むリクエストへ、HTMLではなくANSIテキストのカードを返す。このCLIはUA `ohax-cli/<version> (curl compatible)` で`https://ohatwikeeper.com/<uuid>/<section>`を取得して表示しているだけ
-- 色なしはサーバーの`?nocolor`ではなくクライアント側でエスケープシーケンスを除去して実現している(ユーザーページにクエリ文字列を付けると、現状クエリを落としたURLへ301リダイレクトされるため)
+- データはおはツイKeeperの公開API(`https://ohatwikeeper.com/api/v2/public/users/<uuid>/...`)から取り、画面はすべてこのCLIで描画している。サーバーの`curl`向けテキストカードは使っていない
+- 画像のサムネイルはpbs.twimg.comの小さいJPEGを取得し、「▀」1文字に上下2ピクセルずつ描いている。ギャラリーの「画像を開く」リンクは公開APIが返す`image_proxy_url`(img.ohatwikeeper.com)
 - `OHAX_BASE_URL`で接続先を差し替えられる(開発用)
+
+## 配布物のビルド
+
+`./build.sh`で全OS/CPU向けにクロスコンパイルし、ohatwikeeper.comの`cli/dl/`(と`cli/install.sh`)に配置する。`OHAX_DIST_DIR=dist ./build.sh`なら手元に出すだけ。

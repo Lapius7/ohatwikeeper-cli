@@ -1,7 +1,7 @@
 // ohax — おはツイKeeper(ohatwikeeper.com)の公開プロフィールをターミナルで見るCLI。
 //
-// サーバーはUser-Agentに"curl"を含むリクエストへANSIテキストのカードを返すので、
-// このCLIはそれを取得して表示するだけの薄いクライアント。Go標準ライブラリのみ。
+// データはおはツイKeeperの公開API(/api/v2/public/users/{uuid}/*)から取り、
+// 画面はすべてこのCLIで描画する。Go標準ライブラリのみ。
 package main
 
 import (
@@ -14,16 +14,16 @@ import (
 	"regexp"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
 var version = "dev"
 
-const defaultTimeout = 15 * time.Second
+const defaultTimeout = 20 * time.Second
 
-// セクション名 → URLパス。プロフィールは空パス。
+// セクション名 → ブラウザ版のURLパス。プロフィールは空パス。
 var sections = []struct{ name, path, label string }{
 	{"profile", "", "プロフィール"},
 	{"graph", "graph", "推移グラフ"},
@@ -38,8 +38,12 @@ var extraSections = map[string]string{"rss": "rss"}
 var uuidRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 type options struct {
-	color   bool
-	timeout time.Duration
+	colorForce int // 1: --color, -1: --no-color, 0: 自動
+	noImages   bool
+	limit      int
+	weeks      int
+	days       int
+	width      int
 }
 
 func main() {
@@ -53,34 +57,71 @@ func main() {
 }
 
 func run(args []string) int {
-	opts := options{color: defaultColor(), timeout: defaultTimeout}
+	var opts options
 	var pos []string
+	intFlag := func(name string, i *int, dst *int) bool {
+		a := args[*i]
+		val := ""
+		if v, ok := strings.CutPrefix(a, name+"="); ok {
+			val = v
+		} else if *i+1 < len(args) {
+			*i++
+			val = args[*i]
+		}
+		n, err := strconv.Atoi(val)
+		if err != nil || n <= 0 {
+			fmt.Fprintf(os.Stderr, "✗ %s には正の整数を指定してください\n", name)
+			return false
+		}
+		*dst = n
+		return true
+	}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		switch a {
-		case "-n", "--no-color", "--nocolor":
-			opts.color = false
-		case "--color":
-			opts.color = true
-		case "-h", "--help":
-			usage(os.Stdout)
-			return 0
-		case "-v", "--version":
-			fmt.Println("ohax", version)
-			return 0
-		case "--clear": // ohax use --clear
-			pos = append(pos, a)
-		case "--":
-			pos = append(pos, args[i+1:]...)
-			i = len(args)
-		default:
-			if strings.HasPrefix(a, "-") && len(a) > 1 {
-				fmt.Fprintf(os.Stderr, "ohax: 不明なオプション: %s\n", a)
+		name, _, _ := strings.Cut(a, "=")
+		switch {
+		case a == "-n" || a == "--no-color" || a == "--nocolor":
+			opts.colorForce = -1
+		case a == "--color":
+			opts.colorForce = 1
+		case a == "--no-images" || a == "--no-image":
+			opts.noImages = true
+		case name == "--limit" || name == "-l":
+			if !intFlag(name, &i, &opts.limit) {
 				return 2
 			}
+		case name == "--weeks" || name == "-w":
+			if !intFlag(name, &i, &opts.weeks) {
+				return 2
+			}
+		case name == "--days" || name == "-d":
+			if !intFlag(name, &i, &opts.days) {
+				return 2
+			}
+		case name == "--width":
+			if !intFlag(name, &i, &opts.width) {
+				return 2
+			}
+		case a == "-h" || a == "--help":
+			setupColor(opts.colorForce)
+			usage(os.Stdout)
+			return 0
+		case a == "-v" || a == "--version":
+			fmt.Println("ohax", version)
+			return 0
+		case a == "--clear": // ohax use --clear
+			pos = append(pos, a)
+		case a == "--":
+			pos = append(pos, args[i+1:]...)
+			i = len(args)
+		case strings.HasPrefix(a, "-") && len(a) > 1:
+			fmt.Fprintf(os.Stderr, "✗ 不明なオプション: %s (ohax --help で一覧を見られます)\n", a)
+			return 2
+		default:
 			pos = append(pos, a)
 		}
 	}
+	setupColor(opts.colorForce)
 
 	// 引数なしはヘルプ(既定ユーザーのプロフィールは ohax profile で見る)
 	if len(pos) == 0 {
@@ -100,7 +141,15 @@ func run(args []string) int {
 	case "whoami":
 		return cmdWhoami()
 	case "all":
-		return withTarget(pos[1:], "", func(uuid, _ string) int { return cmdAll(uuid, opts) })
+		return withTarget(pos[1:], "", func(uuid, _ string) int {
+			v := newView(uuid, opts)
+			for _, fn := range []func(view) error{renderProfile, renderGraph, renderGrass, renderAwards, renderGallery} {
+				if err := fn(v); err != nil {
+					return fail(err, uuid)
+				}
+			}
+			return 0
+		})
 	case "open", "url":
 		rest := pos[1:]
 		section := ""
@@ -114,9 +163,10 @@ func run(args []string) int {
 				return 0
 			}
 			if err := openBrowser(u); err != nil {
-				fmt.Fprintf(os.Stderr, "ohax: ブラウザを開けませんでした: %v\n%s\n", err, u)
+				fmt.Fprintf(os.Stderr, "%s ブラウザを開けませんでした: %v\n  %s\n", paint(cRed, "✗"), err, u)
 				return 1
 			}
+			fmt.Println(paint(cSky, "↗") + " " + link(u, u))
 			return 0
 		})
 	}
@@ -127,30 +177,70 @@ func run(args []string) int {
 		section, rest = cmd, pos[1:]
 	}
 	return withTarget(rest, section, func(uuid, sec string) int {
-		body, err := fetch(uuid, pathOf(sec), opts)
-		if body != "" {
-			fmt.Print(body)
+		v := newView(uuid, opts)
+		var err error
+		switch sec {
+		case "graph":
+			err = renderGraph(v)
+		case "grass":
+			err = renderGrass(v)
+		case "awards":
+			err = renderAwards(v)
+		case "gallery":
+			err = renderGallery(v)
+		case "rss":
+			err = printRSS(uuid)
+		default:
+			err = renderProfile(v)
 		}
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ohax: %v\n", err)
-			return 1
+			return fail(err, uuid)
 		}
 		return 0
 	})
+}
+
+func newView(uuid string, opts options) view {
+	v := view{
+		uuid:      uuid,
+		w:         termWidth(opts.width),
+		images:    colorLevel > 0 && !opts.noImages,
+		limit:     opts.limit,
+		weeks:     opts.weeks,
+		days:      opts.days,
+		isDefault: uuid == defaultUUID(),
+	}
+	if v.limit == 0 {
+		v.limit = 12
+		if !v.images {
+			v.limit = 20
+		}
+	}
+	return v
+}
+
+func fail(err error, uuid string) int {
+	if errors.Is(err, errNotFound) {
+		fmt.Fprintf(os.Stderr, "%s ユーザー「%s」は見つかりませんでした。\n", paint(cRed, "✗"), uuid)
+		fmt.Fprintln(os.Stderr, dim("  UUIDが正しいか、公開設定がオンになっているか確かめてください。"))
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, "%s %v\n", paint(cRed, "✗"), err)
+	return 1
 }
 
 // withTarget は引数(UUIDかURL)→環境変数→保存済み設定の順で対象ユーザーを決める。
 // URLにセクションが含まれていて、コマンドでセクションが指定されていなければそれを使う。
 func withTarget(rest []string, section string, fn func(uuid, section string) int) int {
 	if len(rest) > 1 {
-		fmt.Fprintf(os.Stderr, "ohax: 引数が多すぎます: %s\n", strings.Join(rest[1:], " "))
+		fmt.Fprintf(os.Stderr, "%s 引数が多すぎます: %s\n", paint(cRed, "✗"), strings.Join(rest[1:], " "))
 		return 2
 	}
 	var uuid string
 	if len(rest) == 1 {
 		u, sec, err := parseTarget(rest[0])
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ohax: %v\n", err)
+			fmt.Fprintf(os.Stderr, "%s %v\n", paint(cRed, "✗"), err)
 			return 2
 		}
 		uuid = u
@@ -160,8 +250,8 @@ func withTarget(rest []string, section string, fn func(uuid, section string) int
 	} else {
 		uuid = defaultUUID()
 		if uuid == "" {
-			fmt.Fprintln(os.Stderr, "ohax: ユーザーが指定されていません。")
-			fmt.Fprintln(os.Stderr, "  ohax <public_uuid> のように指定するか、ohax use <public_uuid> で既定ユーザーを保存してください。")
+			fmt.Fprintf(os.Stderr, "%s ユーザーが指定されていません。\n", paint(cRed, "✗"))
+			fmt.Fprintln(os.Stderr, dim("  ohax <public_uuid> のように指定するか、ohax use <public_uuid> で既定ユーザーを保存してください。"))
 			return 2
 		}
 	}
@@ -202,7 +292,7 @@ func parseTarget(s string) (uuid, section string, err error) {
 		uuid = strings.TrimSuffix(host, ".ohatwikeeper.com")
 	}
 	if uuid == "" || !uuidRe.MatchString(uuid) {
-		return "", "", fmt.Errorf("public_uuidまたはおはツイKeeperのURLとして解釈できません: %s", s)
+		return "", "", fmt.Errorf("「%s」はpublic_uuidまたはおはツイKeeperのURLとして読み取れません", s)
 	}
 	if len(parts) > 0 && isSection(parts[0]) {
 		section = parts[0]
@@ -249,94 +339,32 @@ func browserURL(uuid, section string) string {
 	return u
 }
 
-// fetch はcurl向けカードを取得する。?nocolorはohax.pw/ユーザーページではリダイレクトで
-// 落ちることがあるので使わず、色なしはクライアント側でエスケープを除去して実現する。
-func fetch(uuid, path string, opts options) (string, error) {
-	u := baseURL() + "/" + uuid
-	if path != "" {
-		u += "/" + path
-	}
+// printRSS はRSSフィード(XML)をそのまま出力する
+func printRSS(uuid string) error {
+	u := baseURL() + "/" + uuid + "/rss"
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
-		return "", err
+		return err
 	}
-	req.Header.Set("User-Agent", "ohax-cli/"+version+" (curl compatible)")
-	req.Header.Set("Accept", "text/plain")
-	client := &http.Client{Timeout: opts.timeout}
-	resp, err := client.Do(req)
+	req.Header.Set("User-Agent", "ohax-cli/"+version)
+	resp, err := httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("取得に失敗しました: %w", err)
+		return fmt.Errorf("おはツイKeeperに接続できませんでした: %w", err)
 	}
 	defer resp.Body.Close()
-	b, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return "", fmt.Errorf("読み込みに失敗しました: %w", err)
-	}
-	body := string(b)
-	ct := resp.Header.Get("Content-Type")
-	if strings.Contains(ct, "text/html") {
-		// curl向けの応答ではない(nginxのエラーページ等)。HTMLは表示しない。
-		return "", fmt.Errorf("予期しない応答です (HTTP %d, %s): %s", resp.StatusCode, ct, u)
-	}
-	if !opts.color {
-		body = stripANSI(body)
+	if resp.StatusCode == http.StatusNotFound {
+		return errNotFound
 	}
 	if resp.StatusCode >= 400 {
-		msg := strings.TrimSpace(stripANSI(body))
-		if msg == "" {
-			msg = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, u)
-		}
-		return "", errors.New(msg)
+		return fmt.Errorf("RSSを取得できませんでした (HTTP %d)", resp.StatusCode)
 	}
-	return body, nil
-}
-
-func cmdAll(uuid string, opts options) int {
-	bodies := make([]string, len(sections))
-	errs := make([]error, len(sections))
-	var wg sync.WaitGroup
-	for i, sec := range sections {
-		wg.Add(1)
-		go func(i int, path string) {
-			defer wg.Done()
-			bodies[i], errs[i] = fetch(uuid, path, opts)
-		}(i, sec.path)
-	}
-	wg.Wait()
-	code := 0
-	for i := range sections {
-		if i > 0 {
-			fmt.Println()
-		}
-		if errs[i] != nil {
-			fmt.Fprintf(os.Stderr, "ohax: %s: %v\n", sections[i].label, errs[i])
-			code = 1
-			// ユーザー不在等は全セクション共通なので1回で止める
-			if i == 0 {
-				return code
-			}
-			continue
-		}
-		fmt.Print(bodies[i])
-	}
-	return code
+	_, err = io.Copy(os.Stdout, resp.Body)
+	return err
 }
 
 var ansiRe = regexp.MustCompile("\x1b\\[[0-9;?]*[A-Za-z]|\x1b\\]8;[^\x1b\x07]*(?:\x1b\\\\|\x07)")
 
 func stripANSI(s string) string { return ansiRe.ReplaceAllString(s, "") }
-
-// defaultColor: NO_COLORがあるか、出力が端末でなければ色なし
-func defaultColor() bool {
-	if _, ok := os.LookupEnv("NO_COLOR"); ok {
-		return false
-	}
-	fi, err := os.Stdout.Stat()
-	if err != nil {
-		return false
-	}
-	return fi.Mode()&os.ModeCharDevice != 0
-}
 
 func openBrowser(u string) error {
 	var c *exec.Cmd
@@ -352,36 +380,47 @@ func openBrowser(u string) error {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprint(w, `ohax — おはツイKeeperの公開プロフィールをターミナルで見る
-
-使い方:
-  ohax <user>                   プロフィール
-  ohax profile [<user>]         プロフィール(既定ユーザーならこちら)
-  ohax graph   [<user>]         推移グラフ
-  ohax grass   [<user>]         投稿グラス(直近12週間)
-  ohax awards  [<user>]         アワード
-  ohax gallery [<user>]         ギャラリー(直近20件)
-  ohax rss     [<user>]         RSSフィード(XML)
-  ohax all     [<user>]         プロフィール〜ギャラリーをまとめて表示
-
-  ohax use <user>               既定ユーザーを保存(以後<user>を省略できる)
-  ohax use --clear              既定ユーザーを削除
-  ohax whoami                   既定ユーザーを表示
-  ohax open [<section>] [<user>]  ブラウザで開く
-  ohax url  [<section>] [<user>]  ブラウザ用URLを表示
-  ohax version
-
-<user> には public_uuid(例: 5axwn)か、URLをそのまま渡せる:
-  https://5axwn.ohax.pw/graph, ohax.pw/5axwn, ohatwikeeper.com/5axwn/awards
-
-オプション:
-  -n, --no-color   色なしで表示(出力がパイプ/リダイレクトのときやNO_COLORがあるときは自動)
-      --color      パイプ先でも色付きで出力
-  -h, --help       このヘルプ
-  -v, --version    バージョン
-
-環境変数:
-  OHAX_UUID        既定ユーザー(ohax useの保存値より優先)
-  NO_COLOR         設定されていれば色なし
-`)
+	h := func(s string) string { return boldPaint(cSun, s) }
+	c := func(s string) string { return paint(cSky, s) }
+	lines := []string{
+		"",
+		" " + gradientText("☀ ohax", sunrise) + "  " + dim("おはツイKeeperをターミナルで ("+version+")"),
+		"",
+		h(" 見る"),
+		"   " + c("ohax <user>") + "                 プロフィール",
+		"   " + c("ohax graph   [<user>]") + "       推移グラフ(いいね・表示・リポスト・返信)",
+		"   " + c("ohax grass   [<user>]") + "       投稿グラス(日ごとの投稿カレンダー)",
+		"   " + c("ohax awards  [<user>]") + "       アワードと次の目標",
+		"   " + c("ohax gallery [<user>]") + "       画像ギャラリー(サムネイル付き)",
+		"   " + c("ohax all     [<user>]") + "       上の5つをまとめて表示",
+		"   " + c("ohax profile [<user>]") + "       プロフィール(既定ユーザーならこちら)",
+		"   " + c("ohax rss     [<user>]") + "       RSSフィード(XML)",
+		"",
+		h(" 既定ユーザー"),
+		"   " + c("ohax use <user>") + "             保存する(以後<user>を省略できる)",
+		"   " + c("ohax use --clear") + "            削除する",
+		"   " + c("ohax whoami") + "                 保存中のユーザーを表示",
+		"",
+		h(" ブラウザ"),
+		"   " + c("ohax open [<page>] [<user>]") + " ブラウザで開く(例: ohax open graph)",
+		"   " + c("ohax url  [<page>] [<user>]") + " URLを表示する",
+		"",
+		h(" オプション"),
+		"   " + c("-d, --days <N>") + "              graph: 直近N日だけ表示",
+		"   " + c("-w, --weeks <N>") + "             grass: 表示する週数(既定は画面幅に合わせる)",
+		"   " + c("-l, --limit <N>") + "             gallery: 表示する件数(既定12)",
+		"   " + c("    --no-images") + "             アバター・サムネイルを表示しない",
+		"   " + c("    --width <N>") + "             表示幅を指定する",
+		"   " + c("-n, --no-color") + "              色なしで表示(パイプ先やNO_COLOR設定時は自動)",
+		"   " + c("    --color") + "                 パイプ先でも色付きで出力",
+		"   " + c("-v, --version") + "               バージョン",
+		"",
+		" " + dim("<user> には public_uuid(例: 5axwn)か、共有URLをそのまま渡せます:"),
+		" " + dim("  https://5axwn.ohax.pw/graph ・ ohatwikeeper.com/5axwn/awards"),
+		"",
+		" " + dim("環境変数: OHAX_UUID(既定ユーザー) / NO_COLOR / OHAX_COLOR=truecolor|256|none"),
+		" " + dim("詳しくは https://ohatwikeeper.com/cli"),
+		"",
+	}
+	fmt.Fprintln(w, strings.Join(lines, "\n"))
 }
