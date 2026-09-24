@@ -49,7 +49,7 @@ ohax ohatwikeeper.com/5axwn/awards
 
 ```bash
 ohax use 5axwn              # 保存(存在確認してから保存する)
-ohax                        # 以後はユーザー省略でOK
+ohax profile                # 以後はユーザー省略でOK(引数なしの ohax はヘルプ)
 ohax grass
 ohax whoami                 # 保存中のユーザー
 ohax use --clear            # 削除

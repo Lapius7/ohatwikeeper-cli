@@ -82,10 +82,12 @@ func run(args []string) int {
 		}
 	}
 
-	cmd := ""
-	if len(pos) > 0 {
-		cmd = pos[0]
+	// 引数なしはヘルプ(既定ユーザーのプロフィールは ohax profile で見る)
+	if len(pos) == 0 {
+		usage(os.Stdout)
+		return 0
 	}
+	cmd := pos[0]
 	switch cmd {
 	case "help":
 		usage(os.Stdout)
@@ -353,7 +355,8 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `ohax — おはツイKeeperの公開プロフィールをターミナルで見る
 
 使い方:
-  ohax [<user>]                 プロフィール
+  ohax <user>                   プロフィール
+  ohax profile [<user>]         プロフィール(既定ユーザーならこちら)
   ohax graph   [<user>]         推移グラフ
   ohax grass   [<user>]         投稿グラス(直近12週間)
   ohax awards  [<user>]         アワード
