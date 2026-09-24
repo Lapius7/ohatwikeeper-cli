@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ohax (おはツイKeeper CLI) のワンライナーインストーラー。
+# ohax (おはツイKeeper 公式CLI) のワンライナーインストーラー。
 #
 #   curl -fsSL https://ohatwikeeper.com/cli/install.sh | bash
 #
@@ -21,7 +21,7 @@ ok()   { printf "%s✓%s %s\n" "$GREEN" "$RESET" "$1"; }
 warn() { printf "%s!%s %s\n" "$YELLOW" "$RESET" "$1"; }
 err()  { printf "%s✗%s %s\n" "$RED" "$RESET" "$1" >&2; }
 
-printf "%sohax%s — おはツイKeeper CLI installer\n\n" "$BOLD" "$RESET"
+printf "%sohax%s — おはツイKeeper 公式CLI インストーラー\n\n" "$BOLD" "$RESET"
 
 case "$(uname -s)" in
   Linux) OS=linux ;;

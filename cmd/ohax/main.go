@@ -1,4 +1,5 @@
-// ohax — おはツイKeeper(ohatwikeeper.com)の公開プロフィールをターミナルで見るCLI。
+// ohax — おはツイKeeper(ohatwikeeper.com)の公式CLI。記録(プロフィール・推移グラフ・
+// 投稿グラス・アワード・ギャラリー)をターミナルにフルカラーで表示する。
 //
 // データはおはツイKeeperの公開API(/api/v2/public/users/{uuid}/*)から取り、
 // 画面はすべてこのCLIで描画する。Go標準ライブラリのみ。
@@ -384,7 +385,7 @@ func usage(w io.Writer) {
 	c := func(s string) string { return paint(cSky, s) }
 	lines := []string{
 		"",
-		" " + gradientText("☀ ohax", sunrise) + "  " + dim("おはツイKeeperをターミナルで ("+version+")"),
+		" " + gradientText("☀ ohax", sunrise) + "  " + dim("おはツイKeeper 公式CLI ("+version+")"),
 		"",
 		h(" 見る"),
 		"   " + c("ohax <user>") + "                 プロフィール",
